@@ -1,0 +1,8 @@
+{"event_type":"process_creation","timestamp":"2024-01-15T10:29:50Z","severity":"high","cmd":"powershell.exe -EncodedCommand AGUAbQBzAC0AYQBtAHMAaQAtAGIAeQBwAGEAcwBz","host":"WORKSTATION01","user":"jdoe","pid":"4521","parent_process":"cmd.exe"}
+{"event_type":"network_connection","timestamp":"2024-01-15T10:29:55Z","severity":"medium","host":"WORKSTATION01","user":"jdoe","dst_ip":"192.168.100.50","dst_port":"443","bytes_out":"15234","protocol":"TCP"}
+{"event_type":"service_installation","timestamp":"2024-01-15T10:30:00Z","severity":"high","host":"WORKSTATION01","user":"SYSTEM","service_name":"WindowsUpdaterHelper","image_path":"C:\\Windows\\Temp\\wuh.exe","start_type":"auto"}
+{"event_type":"login_failure","timestamp":"2024-01-15T10:28:00Z","severity":"low","host":"SERVER02","user":"admin","source_ip":"10.0.0.99","failure_reason":"wrong_password"}
+{"event_type":"login_failure","timestamp":"2024-01-15T10:28:05Z","severity":"low","host":"SERVER02","user":"administrator","source_ip":"10.0.0.99","failure_reason":"wrong_password"}
+{"event_type":"login_failure","timestamp":"2024-01-15T10:28:10Z","severity":"low","host":"SERVER02","user":"admin","source_ip":"10.0.0.99","failure_reason":"wrong_password"}
+{"event_type":"login_failure","timestamp":"2024-01-15T10:28:15Z","severity":"low","host":"SERVER02","user":"root","source_ip":"10.0.0.99","failure_reason":"wrong_password"}
+{"event_type":"login_failure","timestamp":"2024-01-15T10:28:20Z","severity":"low","host":"SERVER02","user":"admin","source_ip":"10.0.0.99","failure_reason":"wrong_password"}

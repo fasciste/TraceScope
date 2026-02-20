@@ -1,0 +1,60 @@
+[package]
+name        = "tracescope"
+version     = "0.1.0"
+edition     = "2021"
+description = "Next-generation async forensic correlation engine"
+authors     = ["TraceScope Contributors"]
+
+[[bin]]
+name = "tracescope"
+path = "src/main.rs"
+
+[lib]
+name = "tracescope"
+path = "src/lib.rs"
+
+# ─── Runtime ─────────────────────────────────────────────────────────────────
+[dependencies]
+tokio       = { version = "1",   features = ["full"] }
+tokio-util  = { version = "0.7", features = ["codec", "io"] }
+bytes       = "1"
+
+# ─── Serde ───────────────────────────────────────────────────────────────────
+serde       = { version = "1", features = ["derive", "rc"] }
+serde_json  = "1"
+
+# ─── Time ────────────────────────────────────────────────────────────────────
+chrono      = { version = "0.4", features = ["serde"] }
+
+# ─── CLI ─────────────────────────────────────────────────────────────────────
+clap        = { version = "4", features = ["derive"] }
+
+# ─── Identifiers ─────────────────────────────────────────────────────────────
+uuid        = { version = "1", features = ["v4", "serde"] }
+
+# ─── Observability ───────────────────────────────────────────────────────────
+tracing             = "0.1"
+tracing-subscriber  = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# ─── Async traits ────────────────────────────────────────────────────────────
+async-trait = "0.1"
+
+# ─── Error handling ──────────────────────────────────────────────────────────
+thiserror   = "1"
+anyhow      = "1"
+
+# ─── Concurrent data structures ──────────────────────────────────────────────
+dashmap     = "5"
+
+# ─── Features ────────────────────────────────────────────────────────────────
+[features]
+default = []
+plugins = []          # Dynamic plugin system
+metrics = []          # Future: Prometheus integration
+full    = ["plugins", "metrics"]
+
+# ─── Dev ─────────────────────────────────────────────────────────────────────
+[dev-dependencies]
+tokio-test  = "0.4"
+async-trait = "0.1"
+tempfile    = "3"
