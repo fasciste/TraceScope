@@ -1,10 +1,4 @@
-/// Integration tests — end-to-end pipeline with synthetic events.
-///
-/// `MockIngestor` is defined locally here because it is only needed for tests
-/// and doesn't belong in the library's public API.
 use tracescope::app::runner::{run, OutputFormat, RunConfig};
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn ps_creation() -> serde_json::Value {
     serde_json::json!({
@@ -30,11 +24,11 @@ fn network_conn() -> serde_json::Value {
 
 fn service_install() -> serde_json::Value {
     serde_json::json!({
-        "event_type":    "service_installation",
-        "severity":      "high",
-        "host":          "WORKSTATION01",
-        "service_name":  "updater_svc",
-        "image_path":    "C:\\Windows\\Temp\\upd.exe"
+        "event_type":   "service_installation",
+        "severity":     "high",
+        "host":         "WORKSTATION01",
+        "service_name": "updater_svc",
+        "image_path":   "C:\\Windows\\Temp\\upd.exe"
     })
 }
 
@@ -48,24 +42,24 @@ fn login_failure(host: &str) -> serde_json::Value {
     })
 }
 
-fn config_with_no_source() -> RunConfig {
+fn base_config(json_paths: Vec<std::path::PathBuf>) -> RunConfig {
     RunConfig {
         evtx_paths:    vec![],
         pcap_paths:    vec![],
         syslog_paths:  vec![],
-        json_paths:    vec![],
+        json_paths,
+        sigma_paths:   vec![],
         output_format: OutputFormat::Json,
         window_secs:   120,
+        metrics_port:  None,
+        web_port:      3000,
     }
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
-
-/// Full pipeline: PS + network + service → 1 Critical detection.
 #[tokio::test]
 async fn pipeline_detects_powershell_lateral() {
-    let dir   = tempfile::TempDir::new().unwrap();
-    let path  = dir.path().join("events.json");
+    let dir  = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("events.json");
 
     let mut content = String::new();
     for ev in &[ps_creation(), network_conn(), service_install()] {
@@ -74,35 +68,19 @@ async fn pipeline_detects_powershell_lateral() {
     }
     tokio::fs::write(&path, &content).await.unwrap();
 
-    let config = RunConfig {
-        json_paths:    vec![path],
-        output_format: OutputFormat::Json,
-        window_secs:   120,
-        evtx_paths:    vec![],
-        pcap_paths:    vec![],
-        syslog_paths:  vec![],
-    };
+    let report = run(base_config(vec![path])).await.unwrap();
 
-    let report = run(config).await.unwrap();
-
-    assert_eq!(report.events_processed, 3, "all 3 events should be processed");
-    assert!(
-        !report.detections.is_empty(),
-        "PowerShell lateral movement should be detected"
-    );
-    assert!(
-        report.detections.iter().any(|d| d.rule_id == "PS-LATERAL-001"),
-        "PS-LATERAL-001 rule should fire"
-    );
-    assert!(report.score.score >= 50, "score should include Critical weight");
+    assert_eq!(report.events_processed, 3);
+    assert!(!report.detections.is_empty(), "PowerShell lateral movement should be detected");
+    assert!(report.detections.iter().any(|d| d.rule_id == "PS-LATERAL-001"));
+    assert!(report.score.score >= 50);
     assert_eq!(report.summary.total, report.detections.len());
 }
 
-/// Full pipeline: 5 login failures → 1 High detection.
 #[tokio::test]
 async fn pipeline_detects_brute_force() {
-    let dir   = tempfile::TempDir::new().unwrap();
-    let path  = dir.path().join("bruteforce.json");
+    let dir  = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("bruteforce.json");
 
     let mut content = String::new();
     for _ in 0..5 {
@@ -111,56 +89,32 @@ async fn pipeline_detects_brute_force() {
     }
     tokio::fs::write(&path, &content).await.unwrap();
 
-    let config = RunConfig {
-        json_paths:    vec![path],
-        output_format: OutputFormat::Json,
-        window_secs:   120,
-        evtx_paths:    vec![],
-        pcap_paths:    vec![],
-        syslog_paths:  vec![],
-    };
-
-    let report = run(config).await.unwrap();
+    let report = run(base_config(vec![path])).await.unwrap();
 
     assert_eq!(report.events_processed, 5);
-    assert!(
-        report.detections.iter().any(|d| d.rule_id == "AUTH-BRUTE-001"),
-        "AUTH-BRUTE-001 rule should fire"
-    );
-    assert_eq!(report.summary.high, 1, "should be exactly 1 high-severity detection");
+    assert!(report.detections.iter().any(|d| d.rule_id == "AUTH-BRUTE-001"));
+    assert_eq!(report.summary.high, 1);
 }
 
-/// No source → error.
 #[tokio::test]
 async fn no_source_returns_error() {
-    let result = run(config_with_no_source()).await;
+    let result = run(base_config(vec![])).await;
     assert!(result.is_err(), "running without sources should return an error");
 }
 
-/// Empty file → zero events, no detections.
 #[tokio::test]
 async fn empty_file_no_detections() {
     let dir  = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("empty.json");
     tokio::fs::write(&path, "").await.unwrap();
 
-    let config = RunConfig {
-        json_paths:    vec![path],
-        output_format: OutputFormat::Json,
-        window_secs:   120,
-        evtx_paths:    vec![],
-        pcap_paths:    vec![],
-        syslog_paths:  vec![],
-    };
-
-    let report = run(config).await.unwrap();
+    let report = run(base_config(vec![path])).await.unwrap();
     assert_eq!(report.events_processed, 0);
     assert!(report.detections.is_empty());
     assert_eq!(report.score.score, 0);
     assert_eq!(report.summary.total, 0);
 }
 
-/// Both attack patterns together → combined score ≥ 60 (LIKELY_COMPROMISE).
 #[tokio::test]
 async fn combined_score_reaches_likely_compromise() {
     let dir  = tempfile::TempDir::new().unwrap();
@@ -177,25 +131,15 @@ async fn combined_score_reaches_likely_compromise() {
     }
     tokio::fs::write(&path, &content).await.unwrap();
 
-    let config = RunConfig {
-        json_paths:    vec![path],
-        output_format: OutputFormat::Json,
-        window_secs:   120,
-        evtx_paths:    vec![],
-        pcap_paths:    vec![],
-        syslog_paths:  vec![],
-    };
-
-    let report = run(config).await.unwrap();
+    let report = run(base_config(vec![path])).await.unwrap();
     assert!(
         report.score.score >= 60,
         "combined score should reach LIKELY_COMPROMISE (got {})",
         report.score.score
     );
-    assert!(report.summary.total >= 2, "at least 2 detections expected");
+    assert!(report.summary.total >= 2);
 }
 
-/// Multi-file ingestion: two JSON files must yield all events.
 #[tokio::test]
 async fn multi_file_ingestion() {
     let dir = tempfile::TempDir::new().unwrap();
@@ -216,18 +160,9 @@ async fn multi_file_ingestion() {
     }
     tokio::fs::write(&path2, &c2).await.unwrap();
 
-    let config = RunConfig {
-        json_paths:    vec![path1, path2],
-        output_format: OutputFormat::Json,
-        window_secs:   120,
-        evtx_paths:    vec![],
-        pcap_paths:    vec![],
-        syslog_paths:  vec![],
-    };
+    let report = run(base_config(vec![path1, path2])).await.unwrap();
 
-    let report = run(config).await.unwrap();
-
-    assert_eq!(report.events_processed, 8, "all 8 events across both files");
+    assert_eq!(report.events_processed, 8);
     assert!(report.detections.iter().any(|d| d.rule_id == "PS-LATERAL-001"));
     assert!(report.detections.iter().any(|d| d.rule_id == "AUTH-BRUTE-001"));
 }

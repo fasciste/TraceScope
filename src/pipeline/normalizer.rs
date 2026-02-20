@@ -1,15 +1,3 @@
-/// Async normalizer: `RawEvent` → `Event`.
-///
-/// Runs as a single long-lived `tokio::spawn` task sitting between the raw
-/// ingestion channel and the dispatcher.  Normalisation is CPU-light so no
-/// `spawn_blocking` is needed.
-///
-/// Strategy:
-///   1. Try `event_type` string field  → `EventType`
-///   2. Try Windows `EventID` integer  → `EventType`
-///   3. Try `severity` / `Level` field → `Severity`
-///   4. Flatten the entire JSON object into `metadata: HashMap<String, String>`
-///   5. Override timestamp from `timestamp` / `@timestamp` if present
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,8 +14,6 @@ pub struct Normalizer;
 impl Normalizer {
     pub fn new() -> Self { Self }
 
-    /// Consume `raw_rx`, emit normalised events to `norm_tx`, and increment
-    /// `counter` for each successfully normalised event.
     pub async fn run(
         &self,
         mut raw_rx: mpsc::Receiver<RawEvent>,
@@ -49,8 +35,6 @@ impl Normalizer {
         debug!("Normalizer task finished");
     }
 
-    // ─── Core normalisation ───────────────────────────────────────────────────
-
     fn normalize(&self, raw: RawEvent) -> Result<Event> {
         let data       = &raw.raw_data;
         let event_type = self.detect_event_type(data);
@@ -66,38 +50,37 @@ impl Normalizer {
     }
 
     fn detect_event_type(&self, data: &serde_json::Value) -> EventType {
-        // 1. Explicit `event_type` string
         if let Some(et) = data.get("event_type").and_then(|v| v.as_str()) {
             return match et {
-                "process_creation"    => EventType::ProcessCreation,
-                "network_connection"  => EventType::NetworkConnection,
-                "file_creation"       => EventType::FileCreation,
-                "service_installation"=> EventType::ServiceInstallation,
+                "process_creation"     => EventType::ProcessCreation,
+                "network_connection"   => EventType::NetworkConnection,
+                "file_creation"        => EventType::FileCreation,
+                "service_installation" => EventType::ServiceInstallation,
                 "registry_modification"=> EventType::RegistryModification,
-                "login_attempt"       => EventType::LoginAttempt,
-                "login_success"       => EventType::LoginSuccess,
-                "login_failure"       => EventType::LoginFailure,
-                "privilege_escalation"=> EventType::PrivilegeEscalation,
-                "command_execution"   => EventType::CommandExecution,
-                "dns_query"           => EventType::DnsQuery,
-                other                 => EventType::Unknown(other.to_owned()),
+                "login_attempt"        => EventType::LoginAttempt,
+                "login_success"        => EventType::LoginSuccess,
+                "login_failure"        => EventType::LoginFailure,
+                "privilege_escalation" => EventType::PrivilegeEscalation,
+                "command_execution"    => EventType::CommandExecution,
+                "dns_query"            => EventType::DnsQuery,
+                other                  => EventType::Unknown(other.to_owned()),
             };
         }
 
-        // 2. Windows EventID
+        // Windows EventID → normalized type
         if let Some(id) = data.get("EventID").and_then(|v| v.as_u64()) {
             return match id {
-                4688       => EventType::ProcessCreation,
-                3 | 5156   => EventType::NetworkConnection,
-                11         => EventType::FileCreation,
-                7045       => EventType::ServiceInstallation,
-                4657       => EventType::RegistryModification,
-                4648       => EventType::LoginAttempt,
-                4624       => EventType::LoginSuccess,
-                4625       => EventType::LoginFailure,
-                4672       => EventType::PrivilegeEscalation,
-                1          => EventType::ProcessCreation, // Sysmon Process Create
-                _          => EventType::Unknown(format!("EventID:{id}")),
+                4688     => EventType::ProcessCreation,
+                3 | 5156 => EventType::NetworkConnection,
+                11       => EventType::FileCreation,
+                7045     => EventType::ServiceInstallation,
+                4657     => EventType::RegistryModification,
+                4648     => EventType::LoginAttempt,
+                4624     => EventType::LoginSuccess,
+                4625     => EventType::LoginFailure,
+                4672     => EventType::PrivilegeEscalation,
+                1        => EventType::ProcessCreation,
+                _        => EventType::Unknown(format!("EventID:{id}")),
             };
         }
 
@@ -114,7 +97,7 @@ impl Normalizer {
                 _          => Severity::Info,
             };
         }
-        // Windows event level: 1=Critical, 2=Error, 3=Warning, 4=Info
+        // Windows event level: 1=Critical 2=Error 3=Warning 4=Info
         if let Some(level) = data.get("Level").and_then(|v| v.as_u64()) {
             return match level {
                 1    => Severity::Critical,

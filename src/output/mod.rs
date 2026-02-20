@@ -1,5 +1,6 @@
 pub mod cli;
 pub mod json;
+pub mod web;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;

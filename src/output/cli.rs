@@ -1,4 +1,3 @@
-/// Human-readable CLI report — no external crates, pure ANSI escapes.
 use super::ForensicReport;
 
 const SEP: &str  = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
@@ -16,11 +15,8 @@ pub fn print_report(report: &ForensicReport) {
     println!("  Generated : {}", report.generated_at.format("%Y-%m-%d %H:%M:%S UTC"));
     println!("  Duration  : {:.3}s", report.duration_secs);
     println!("  Events    : {}", report.events_processed);
-    println!(
-        "  Score     : \x1b[1m{score}/100\x1b[0m  [{colour}{level}\x1b[0m]"
-    );
+    println!("  Score     : \x1b[1m{score}/100\x1b[0m  [{colour}{level}\x1b[0m]");
 
-    // ── Detection summary bar ────────────────────────────────────────────────
     println!("{SEP2}");
     if s.total == 0 {
         println!("  Detections: \x1b[32m0  — no threats detected\x1b[0m");
@@ -64,10 +60,10 @@ pub fn print_report(report: &ForensicReport) {
 
 fn threat_colour(level: &str) -> &'static str {
     match level {
-        "CLEAN"             => "\x1b[32m",   // green
-        "SUSPICIOUS"        => "\x1b[33m",   // yellow
-        "LIKELY_COMPROMISE" => "\x1b[31m",   // red
-        "CRITICAL_INCIDENT" => "\x1b[1;31m", // bold red
+        "CLEAN"             => "\x1b[32m",
+        "SUSPICIOUS"        => "\x1b[33m",
+        "LIKELY_COMPROMISE" => "\x1b[31m",
+        "CRITICAL_INCIDENT" => "\x1b[1;31m",
         _                   => "\x1b[0m",
     }
 }

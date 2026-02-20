@@ -5,9 +5,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-// ─── Source ───────────────────────────────────────────────────────────────────
-
-/// Where the raw event originated.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(tag = "kind")]
 pub enum EventSource {
@@ -21,16 +18,14 @@ pub enum EventSource {
 impl std::fmt::Display for EventSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Evtx   { file, .. }      => write!(f, "evtx:{file}"),
-            Self::Syslog { host, .. }      => write!(f, "syslog:{host}"),
-            Self::Pcap   { interface }     => write!(f, "pcap:{interface}"),
-            Self::Json   { file }          => write!(f, "json:{file}"),
-            Self::Mock                     => write!(f, "mock"),
+            Self::Evtx   { file, .. }  => write!(f, "evtx:{file}"),
+            Self::Syslog { host, .. }  => write!(f, "syslog:{host}"),
+            Self::Pcap   { interface } => write!(f, "pcap:{interface}"),
+            Self::Json   { file }      => write!(f, "json:{file}"),
+            Self::Mock                 => write!(f, "mock"),
         }
     }
 }
-
-// ─── EventType ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -49,8 +44,6 @@ pub enum EventType {
     Unknown(String),
 }
 
-// ─── Severity ─────────────────────────────────────────────────────────────────
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "PascalCase")]
 pub enum Severity {
@@ -62,7 +55,6 @@ pub enum Severity {
 }
 
 impl Severity {
-    /// Score weight contributed when this severity triggers a detection.
     pub fn weight(self) -> u32 {
         match self {
             Self::Info     => 1,
@@ -87,12 +79,8 @@ impl std::fmt::Display for Severity {
     }
 }
 
-// ─── Event ────────────────────────────────────────────────────────────────────
-
-/// Immutable, thread-safe, normalized forensic event.
-///
-/// Metadata is stored behind an `Arc` so cloning is O(1) — critical for
-/// fan-out through broadcast channels.
+/// Immutable normalized forensic event. `metadata` is Arc-wrapped so
+/// cloning is O(1) across broadcast fan-out.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub id:         Uuid,
@@ -125,16 +113,12 @@ impl Event {
         self
     }
 
-    /// Cheap metadata lookup — does not clone.
     #[inline]
     pub fn get_meta(&self, key: &str) -> Option<&str> {
         self.metadata.get(key).map(String::as_str)
     }
 }
 
-// ─── RawEvent ─────────────────────────────────────────────────────────────────
-
-/// Pre-normalization event: raw JSON value from an ingestor.
 #[derive(Debug, Clone)]
 pub struct RawEvent {
     pub source:      EventSource,

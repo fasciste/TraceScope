@@ -5,16 +5,13 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 use tracescope::app::runner::{run, OutputFormat, RunConfig};
-use tracescope::output::{cli as cli_out, json as json_out};
-
-// ─── CLI definition ───────────────────────────────────────────────────────────
+use tracescope::output::{cli as cli_out, json as json_out, web as web_out};
 
 #[derive(Parser)]
 #[command(
     name    = "tracescope",
     version = env!("CARGO_PKG_VERSION"),
     about   = "Next-generation async forensic correlation engine",
-    long_about = None
 )]
 struct Cli {
     #[command(subcommand)]
@@ -23,45 +20,48 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Ingest one or more sources, correlate events, and produce a report.
-    ///
-    /// Flags can be repeated to supply multiple files of the same type:
-    ///   tracescope ingest --json host1.json --json host2.json
-    ///   tracescope ingest --evtx security.evtx --pcap traffic.pcap
-    ///   tracescope ingest --json events.json --output json > report.json
+    /// Ingest files, correlate events, and produce a threat report.
     Ingest {
-        /// Path(s) to EVTX / JSON-lines EVTX export (repeatable).
+        /// EVTX file (repeatable, native parser)
         #[arg(long, value_name = "FILE", num_args = 1)]
         evtx: Vec<PathBuf>,
 
-        /// Path(s) to PCAP / JSON-lines PCAP export (repeatable).
+        /// PCAP file (repeatable, native parser)
         #[arg(long, value_name = "FILE", num_args = 1)]
         pcap: Vec<PathBuf>,
 
-        /// Path(s) to syslog file (repeatable).
+        /// Syslog file (repeatable)
         #[arg(long, value_name = "FILE", num_args = 1)]
         syslog: Vec<PathBuf>,
 
-        /// Path(s) to JSON-lines event file (repeatable).
+        /// JSON-lines event file (repeatable)
         #[arg(long, value_name = "FILE", num_args = 1)]
         json: Vec<PathBuf>,
 
-        /// Output format: `cli` (default) or `json`.
+        /// Sigma YAML rule file (repeatable, stacks on top of built-ins)
+        #[arg(long, value_name = "FILE", num_args = 1)]
+        sigma: Vec<PathBuf>,
+
+        /// Output format: cli (default) | json | web
         #[arg(long, default_value = "cli", value_name = "FORMAT")]
         output: String,
 
-        /// Correlation window in seconds (default 120).
+        /// Correlation window in seconds
         #[arg(long, default_value = "120", value_name = "SECS")]
         window: u64,
+
+        /// Export Prometheus metrics on this port (e.g. 9090)
+        #[arg(long, value_name = "PORT")]
+        metrics_port: Option<u16>,
+
+        /// Port for the web dashboard (with --output web)
+        #[arg(long, default_value = "3000", value_name = "PORT")]
+        web_port: u16,
     },
 }
 
-// ─── Entry point ─────────────────────────────────────────────────────────────
-
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialise tracing.  Honour RUST_LOG; fall back to info-level for the
-    // tracescope crate.
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -74,9 +74,12 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Ingest { evtx, pcap, syslog, json, output, window } => {
+        Commands::Ingest {
+            evtx, pcap, syslog, json, sigma, output, window, metrics_port, web_port,
+        } => {
             let fmt = match output.as_str() {
                 "json" => OutputFormat::Json,
+                "web"  => OutputFormat::Web,
                 _      => OutputFormat::Cli,
             };
 
@@ -85,15 +88,19 @@ async fn main() -> Result<()> {
                 pcap_paths:    pcap,
                 syslog_paths:  syslog,
                 json_paths:    json,
+                sigma_paths:   sigma,
                 output_format: fmt.clone(),
                 window_secs:   window as i64,
+                metrics_port,
+                web_port,
             };
 
             let report = run(config).await?;
 
             match fmt {
-                OutputFormat::Json => json_out::print_report(&report)?,
                 OutputFormat::Cli  => cli_out::print_report(&report),
+                OutputFormat::Json => json_out::print_report(&report)?,
+                OutputFormat::Web  => web_out::serve(report, web_port).await?,
             }
         }
     }

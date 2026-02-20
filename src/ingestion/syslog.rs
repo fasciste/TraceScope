@@ -1,11 +1,3 @@
-/// Syslog ingestor.
-///
-/// Reads a syslog file line-by-line.  Each line is either:
-///   • a raw RFC-3164/RFC-5424 syslog line → wrapped in a JSON object
-///     `{ "raw": "<line>", "source": "<host>" }`
-///   • a pre-serialised JSON object (structured syslog)
-///
-/// Production extension: bind a UDP/TCP socket and tail -f for live ingestion.
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -18,18 +10,13 @@ use crate::domain::event::{EventSource, RawEvent};
 use super::Ingestor;
 
 pub struct SyslogIngestor {
-    path: PathBuf,
-    /// Logical host name embedded in metadata when the file itself does not
-    /// include a hostname field.
+    path:         PathBuf,
     default_host: String,
 }
 
 impl SyslogIngestor {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self {
-            path:         path.into(),
-            default_host: "localhost".into(),
-        }
+        Self { path: path.into(), default_host: "localhost".into() }
     }
 
     pub fn with_host(mut self, host: impl Into<String>) -> Self {
@@ -43,17 +30,13 @@ impl Ingestor for SyslogIngestor {
     fn name(&self) -> &str { "syslog" }
 
     async fn ingest(&self, tx: mpsc::Sender<RawEvent>) -> Result<()> {
-        info!(path = %self.path.display(), "Starting syslog ingestion");
+        info!(path = %self.path.display(), "Syslog ingestion starting");
 
         let file = tokio::fs::File::open(&self.path)
             .await
-            .with_context(|| format!("Cannot open syslog file: {}", self.path.display()))?;
+            .with_context(|| format!("Cannot open syslog: {}", self.path.display()))?;
 
-        let source = EventSource::Syslog {
-            host:     self.default_host.clone(),
-            facility: 1,
-        };
-
+        let source = EventSource::Syslog { host: self.default_host.clone(), facility: 1 };
         let mut lines = BufReader::new(file).lines();
         let mut count = 0u64;
 
@@ -61,20 +44,16 @@ impl Ingestor for SyslogIngestor {
             let line = line.trim().to_owned();
             if line.is_empty() { continue; }
 
-            // Try to parse as JSON first; otherwise wrap the raw string.
-            let raw_data = serde_json::from_str::<serde_json::Value>(&line)
-                .unwrap_or_else(|_| {
-                    serde_json::json!({
-                        "event_type": "syslog",
-                        "raw":        line,
-                        "host":       self.default_host,
-                    })
-                });
+            let raw = serde_json::from_str::<serde_json::Value>(&line)
+                .unwrap_or_else(|_| serde_json::json!({
+                    "event_type": "syslog",
+                    "raw":        line,
+                    "host":       self.default_host,
+                }));
 
             count += 1;
-            let event = RawEvent::new(source.clone(), raw_data);
-            if tx.send(event).await.is_err() {
-                debug!("Syslog downstream closed — stopping");
+            if tx.send(RawEvent::new(source.clone(), raw)).await.is_err() {
+                debug!("Syslog downstream closed");
                 break;
             }
         }

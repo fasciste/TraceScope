@@ -4,47 +4,45 @@
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**TraceScope** is a next-generation, fully-async forensic correlation engine written in Rust.
-It ingests raw security events (Windows EVTX, PCAP, syslog, JSON-lines), normalizes them through a streaming pipeline, evaluates concurrent detection rules with a sliding-window correlator, and produces a scored threat report — without materializing the entire event stream into memory.
+**TraceScope** is a next-generation async forensic correlation engine written in Rust.
+
+Drop in your Windows EVTX logs, PCAP captures, syslog files, or JSON-lines events. TraceScope streams them through a concurrent normalization pipeline, correlates events over a configurable sliding window, and fires detection rules to produce a scored threat report — all without loading the entire event stream into memory.
 
 ---
 
-## Key Features
+## Features
 
-| Feature | Detail |
-|---|---|
-| **100 % async / non-blocking** | Tokio runtime, bounded `mpsc` + `broadcast` channels, `JoinSet` concurrency |
-| **Streaming pipeline** | No `Vec<Event>` accumulation — events flow: Ingestor → Normalizer → Dispatcher → Rule Engine → Scorer |
-| **Replay-safe correlator** | Reference "now" = max event timestamp (not wall clock) — works correctly on historical forensic data |
-| **Sliding-window correlation** | Configurable window (default 120 s); O(1) cached `latest_ts` with front-eviction |
-| **5 built-in detection rules** | PS lateral movement, brute-force, DNS tunneling, registry persistence, credential dumping |
-| **Atomic threat scoring** | Lock-free `AtomicU32`, four threat levels: CLEAN → SUSPICIOUS → LIKELY_COMPROMISE → CRITICAL_INCIDENT |
-| **Multi-file ingestion** | Each `--json / --evtx / --pcap / --syslog` flag is repeatable; all files are ingested concurrently |
-| **Detection summary** | Per-severity breakdown (CRITICAL / HIGH / MEDIUM / LOW / INFO) in every report |
-| **Dual output** | ANSI-coloured CLI report or machine-readable JSON (`--output json`) |
-| **Plugin system** | Feature-gated (`--features plugins`) for custom rule extensions |
-| **GitHub Actions CI** | `cargo build`, `cargo test`, `cargo clippy -D warnings` on every push |
+- **Native EVTX parsing** — reads `.evtx` files directly via pure-Rust `evtx` crate, no external tools needed
+- **Native PCAP parsing** — deep packet inspection with `pcap-file` + `etherparse`: extracts IPs, ports, and DNS queries
+- **Live network capture** — capture from a live interface with `--features live-capture` (requires libpcap / `CAP_NET_RAW`)
+- **Sigma rule loader** — load any YAML Sigma rule at runtime with `--sigma rule.yml`; supports `contains`, `startswith`, `endswith`, `and/or/not`, `1 of X*`, `all of X*`
+- **5 built-in detection rules** — PowerShell lateral movement, brute force, DNS tunneling, registry persistence, credential dumping
+- **Sliding-window correlation** — configurable window (default 120 s); replay-safe (uses event timestamps, not wall clock)
+- **Atomic threat scoring** — lock-free `AtomicU32` incremented by concurrent rule tasks; four levels: `CLEAN` → `SUSPICIOUS` → `LIKELY_COMPROMISE` → `CRITICAL_INCIDENT`
+- **Three output modes** — ANSI-coloured CLI report, machine-readable JSON, or a live web dashboard
+- **Prometheus metrics** — expose `tracescope_events_total`, `tracescope_detections_total`, `tracescope_threat_score` on any port with `--metrics-port`
+- **Fully async** — Tokio runtime with bounded `mpsc` + `broadcast` channels; backpressure throughout
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                     TraceScope Pipeline                      │
-│                                                              │
-│  Ingestors ──mpsc──▶ Normalizer ──mpsc──▶ Dispatcher        │
-│  (concurrent)                              │                 │
-│                                     broadcast (fan-out)      │
-│                                            │                 │
-│                                     Rule Engine              │
-│                                     (JoinSet per event)      │
-│                                            │                 │
-│                                     mpsc──▶ Score + Report  │
-└──────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                     TraceScope Pipeline                     │
+│                                                             │
+│  Ingestors ──mpsc──▶ Normalizer ──mpsc──▶ Dispatcher       │
+│  (concurrent)                              │       │        │
+│                                       correlator  broadcast │
+│                                                      │      │
+│                                               Rule Engine   │
+│                                               (JoinSet)     │
+│                                                      │      │
+│                                             Score + Report  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-All channels are **bounded** (backpressure). Shutdown is **cascade-automatic**: when ingestors finish they drop their senders, and each stage propagates EOF downstream. No explicit shutdown signals are needed.
+All channels are **bounded** (backpressure). Shutdown is **cascade-automatic**: ingestors close their senders when done, which propagates EOF through each stage without any explicit signal.
 
 ---
 
@@ -58,30 +56,25 @@ All channels are **bounded** (backpressure). Shutdown is **cascade-automatic**: 
 | `REG-PERSIST-001` | Registry Persistence | T1547.001 | Medium |
 | `CRED-DUMP-001` | Credential Dumping | T1003 | Critical |
 
-### Rule Logic
-
-- **PS-LATERAL-001** — triggers on `ServiceInstallation` and looks back for a `ProcessCreation` containing `powershell` AND a `NetworkConnection` from the same host, all within the correlation window.
-- **AUTH-BRUTE-001** — fires when ≥ 5 `LoginFailure` events for the same host appear within the window (re-fires at every 5th multiple).
-- **DNS-TUNNEL-001** — fires when ≥ 10 `DnsQuery` events come from the same host within the window, OR when a single DNS query name exceeds 40 characters (base64/hex encoded payload).
-- **REG-PERSIST-001** — fires on any `RegistryModification` targeting known Windows Run/RunOnce/Winlogon/Services paths.
-- **CRED-DUMP-001** — fires on `ProcessCreation` whose command line contains known credential-dumping indicators (mimikatz, sekurlsa, lsadump, procdump+lsass, comsvcs MiniDump, WCE, and more).
+- **PS-LATERAL-001** — fires on `ServiceInstallation` if the same host also had a `ProcessCreation` with `powershell` and a `NetworkConnection` within the correlation window.
+- **AUTH-BRUTE-001** — fires when ≥ 5 `LoginFailure` events from the same host appear within the window.
+- **DNS-TUNNEL-001** — fires when ≥ 10 `DnsQuery` events come from the same host within the window, or when a single query name exceeds 40 characters.
+- **REG-PERSIST-001** — fires on `RegistryModification` targeting known Windows persistence paths (Run, RunOnce, Winlogon, Services).
+- **CRED-DUMP-001** — fires on `ProcessCreation` whose command line contains known credential-dumping indicators (mimikatz, sekurlsa, lsadump, procdump+lsass, etc.).
 
 ---
 
 ## Installation
 
-### Prerequisites
-
-- [Rust stable toolchain](https://rustup.rs/) (≥ 1.75)
-
-### Build from source
-
 ```bash
 git clone https://github.com/fasciste/TraceScope.git
 cd TraceScope
 cargo build --release
-# Binary: ./target/release/tracescope
+# binary: ./target/release/tracescope
 ```
+
+**Requirements:** Rust stable ≥ 1.75. No other dependencies for offline analysis.
+For live capture: `cargo build --release --features live-capture` (requires libpcap headers).
 
 ---
 
@@ -90,31 +83,44 @@ cargo build --release
 ```
 tracescope ingest [OPTIONS]
 
-Options:
-  --json   <FILE>    JSON-lines event file (repeatable)
-  --evtx   <FILE>    EVTX / JSON-lines EVTX export (repeatable)
-  --pcap   <FILE>    PCAP / JSON-lines PCAP export (repeatable)
+  --evtx   <FILE>    Windows EVTX file (repeatable)
+  --pcap   <FILE>    PCAP capture file (repeatable)
   --syslog <FILE>    Syslog file (repeatable)
-  --output <FORMAT>  Output format: cli (default) | json
-  --window <SECS>    Correlation window in seconds (default: 120)
+  --json   <FILE>    JSON-lines event file (repeatable)
+  --sigma  <FILE>    Sigma YAML rule (repeatable, stacks on built-ins)
+
+  --output <FORMAT>  cli (default) | json | web
+  --window <SECS>    Correlation window in seconds [default: 120]
+
+  --metrics-port <PORT>  Expose Prometheus /metrics on this port
+  --web-port     <PORT>  Port for the web dashboard [default: 3000]
 ```
 
 ### Examples
 
 ```bash
-# Analyse a single JSON-lines event file
-tracescope ingest --json events.json
-
-# Multiple files of the same type (ingested concurrently)
-tracescope ingest --json host1.json --json host2.json --json host3.json
+# Analyse a Windows EVTX file
+tracescope ingest --evtx security.evtx
 
 # Mix sources with a 5-minute correlation window
 tracescope ingest --evtx security.evtx --pcap traffic.pcap --window 300
 
+# Multiple JSON files ingested concurrently
+tracescope ingest --json host1.json --json host2.json --json host3.json
+
+# Load a custom Sigma rule on top of built-ins
+tracescope ingest --evtx security.evtx --sigma my_rule.yml
+
 # Machine-readable JSON output (pipe to jq, SIEM, etc.)
 tracescope ingest --json events.json --output json | jq '.score'
 
-# Verbose debug logging
+# Web dashboard — opens at http://localhost:3000 after the pipeline finishes
+tracescope ingest --evtx security.evtx --output web --web-port 3000
+
+# Expose Prometheus metrics while processing
+tracescope ingest --json events.json --metrics-port 9090
+
+# Verbose logging
 RUST_LOG=tracescope=debug tracescope ingest --json events.json
 ```
 
@@ -146,7 +152,7 @@ RUST_LOG=tracescope=debug tracescope ingest --json events.json
 
 ## JSON-lines event format
 
-The `--json` ingestor reads one JSON object per line. Supported fields:
+The `--json` ingestor reads one JSON object per line:
 
 ```json
 {
@@ -160,48 +166,44 @@ The `--json` ingestor reads one JSON object per line. Supported fields:
 }
 ```
 
-`event_type` values: `process_creation`, `network_connection`, `file_creation`, `service_installation`, `registry_modification`, `login_attempt`, `login_success`, `login_failure`, `privilege_escalation`, `command_execution`, `dns_query`.
+Supported `event_type` values: `process_creation`, `network_connection`, `file_creation`, `service_installation`, `registry_modification`, `login_attempt`, `login_success`, `login_failure`, `privilege_escalation`, `command_execution`, `dns_query`.
 
-All other fields are stored as string metadata and are accessible to rules via `event.get_meta("key")`.
+All other fields are stored as string metadata accessible to rules via `event.get_meta("key")`.
 
 ---
 
-## Running the test suite
+## Writing a Sigma rule
+
+Any standard Sigma YAML file works:
+
+```yaml
+title: Suspicious Base64 PowerShell
+id: MY-PS-001
+level: high
+logsource:
+  category: process_creation
+detection:
+  selection:
+    cmd|contains:
+      - '-EncodedCommand'
+      - '-enc '
+  condition: selection
+tags:
+  - attack.execution
+  - T1059.001
+```
+
+Load it at runtime:
 
 ```bash
-cargo test                     # all unit + integration tests
-cargo test -- --nocapture      # with stdout
-cargo clippy -- -D warnings    # lint (zero warnings enforced in CI)
+tracescope ingest --json events.json --sigma my_rule.yml
 ```
 
 ---
 
-## Project structure
+## Writing a custom Rust rule
 
-```
-src/
-├── domain/         # Core types: Event, Detection, Rule trait, ScoreEngine
-├── ingestion/      # Async ingestors: JSON, EVTX, PCAP, Syslog
-├── pipeline/       # Normalizer, Dispatcher, Correlator (sliding window)
-├── rules/
-│   ├── engine.rs   # JoinSet concurrent rule evaluation
-│   └── builtin/    # 5 built-in rules + mod.rs loader
-├── output/         # CLI (ANSI) + JSON reporters, ForensicReport, DetectionSummary
-├── plugins/        # Feature-gated plugin system
-├── app/            # Runner (pipeline orchestration) + RunConfig
-├── error.rs        # TracescopeError
-└── lib.rs          # Public module re-exports
-tests/
-└── integration_test.rs   # End-to-end tests (6 scenarios)
-.github/
-└── workflows/ci.yml      # GitHub Actions CI
-```
-
----
-
-## Adding a custom rule
-
-1. Create `src/rules/builtin/my_rule.rs` and implement the `Rule` async trait:
+1. Create `src/rules/builtin/my_rule.rs`:
 
 ```rust
 use async_trait::async_trait;
@@ -212,13 +214,13 @@ pub struct MyRule;
 
 #[async_trait]
 impl Rule for MyRule {
-    fn id(&self)   -> &str { "MY-RULE-001" }
-    fn name(&self) -> &str { "My Custom Rule" }
+    fn id(&self)          -> &str { "MY-RULE-001" }
+    fn name(&self)        -> &str { "My Custom Rule" }
     fn description(&self) -> &str { "Detects X." }
-    fn tags(&self) -> &[&'static str] { &["custom", "T1234"] }
+    fn tags(&self)        -> &[&'static str] { &["custom", "T1234"] }
 
     async fn evaluate(&self, event: &Event, ctx: &RuleContext) -> Result<Option<Detection>> {
-        // Inspect event and correlator context; return Some(Detection) or None.
+        // inspect event + ctx.recent_events(); return Some(Detection::new(...)) or None
         Ok(None)
     }
 }
@@ -231,7 +233,7 @@ pub mod my_rule;
 
 pub fn load_all() -> Vec<Arc<dyn Rule>> {
     vec![
-        // ... existing rules ...
+        // existing rules...
         Arc::new(my_rule::MyRule),
     ]
 }
@@ -239,52 +241,34 @@ pub fn load_all() -> Vec<Arc<dyn Rule>> {
 
 ---
 
-## Pushing to GitHub
+## Project structure
 
-### First push
-
-```bash
-# 1. Create a new EMPTY repository on github.com
-#    (do NOT initialize it with README, .gitignore or license)
-
-# 2. Inside the TraceScope directory:
-git init
-git add .
-git commit -m "feat: initial TraceScope release"
-
-# 3. Link and push
-git remote add origin https://github.com/fasciste/TraceScope.git
-git branch -M main
-git push -u origin main
 ```
-
-### Subsequent changes
-
-```bash
-git add .
-git commit -m "feat: describe your change"
-git push
-```
-
-### Recommended branch workflow
-
-```bash
-git checkout -b feat/my-new-rule
-# ... make changes and commit ...
-git push -u origin feat/my-new-rule
-# Open a Pull Request → CI runs → merge after green checks
+src/
+├── domain/         # Core types: Event, Detection, Rule trait, ScoreEngine
+├── ingestion/      # Async ingestors: EVTX, PCAP, Syslog, JSON-lines
+├── pipeline/       # Normalizer, Dispatcher, Correlator (sliding window)
+├── rules/
+│   ├── engine.rs   # Concurrent rule evaluation (JoinSet per event)
+│   ├── sigma.rs    # Sigma YAML rule loader
+│   └── builtin/    # 5 built-in detection rules
+├── output/         # CLI (ANSI), JSON, and web dashboard reporters
+├── capture/        # Live network capture (feature-gated)
+├── metrics.rs      # Prometheus metrics
+└── app/            # Runner: pipeline orchestration + RunConfig
+tests/
+└── integration_test.rs
 ```
 
 ---
 
-## Roadmap
+## Running tests
 
-- [ ] Native EVTX parsing via `evtx` crate
-- [ ] PCAP deep-packet inspection via `pcap` crate
-- [ ] Sigma rule loader (YAML → `Rule` trait)
-- [ ] Live network capture mode
-- [ ] Web dashboard output
-- [ ] OpenTelemetry metrics export
+```bash
+cargo test                     # unit + integration tests
+cargo test -- --nocapture      # with stdout
+cargo clippy -- -D warnings    # zero warnings enforced in CI
+```
 
 ---
 
