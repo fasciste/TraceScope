@@ -1,12 +1,3 @@
-/// Rule: DNS Tunneling / Exfiltration
-///
-/// Pattern (MITRE T1071.004):
-///   • High-frequency DnsQuery events (≥ 10) from the same host within the
-///     correlation window — consistent with a DNS-based C2 beacon loop.
-///   • A single DnsQuery whose name exceeds 40 characters — typical of base64
-///     or hex-encoded payloads stuffed into subdomain labels.
-///
-/// Fires on threshold boundaries to avoid duplicate detections on streaming data.
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -45,10 +36,8 @@ impl Rule for DnsTunnelingRule {
             .unwrap_or("");
         let host = event.get_meta("host").unwrap_or("unknown");
 
-        // ── Indicator 1: suspiciously long query name (encoded payload) ──────
         let long_query = query_name.len() > LEN_THRESHOLD;
 
-        // ── Indicator 2: high-frequency beacon pattern ───────────────────────
         let dns_count = context.count_where_before(
             &EventType::DnsQuery,
             "host",
@@ -61,7 +50,7 @@ impl Rule for DnsTunnelingRule {
             return Ok(None);
         }
 
-        // For high-frequency: only fire on threshold boundaries.
+        // For frequency-based detection, only fire at threshold boundaries.
         if high_freq && !long_query && dns_count % FREQ_THRESHOLD != 0 {
             return Ok(None);
         }

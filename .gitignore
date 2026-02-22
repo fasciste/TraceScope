@@ -1,36 +1,23 @@
-# ─── Build artifacts ──────────────────────────────────────────────────────────
 /target/
 Cargo.lock
-
-# ─── IDE / editor ─────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 .DS_Store
-
-# ─── Environment / secrets ────────────────────────────────────────────────────
 .env
 .env.*
 *.key
 *.pem
 *.p12
-
-# ─── Forensic input files (may contain sensitive data) ───────────────────────
 *.evtx
 *.pcap
 *.pcapng
 *.cap
-
-# ─── Output reports ───────────────────────────────────────────────────────────
 report*.json
 output*.json
-
-# ─── Benchmarks / profiling ───────────────────────────────────────────────────
 flamegraph.svg
 perf.data
 criterion/
-
-# ─── OS ───────────────────────────────────────────────────────────────────────
 Thumbs.db

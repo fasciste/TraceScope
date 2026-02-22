@@ -1,10 +1,3 @@
-/// Rule: Brute-Force Authentication Attack
-///
-/// Pattern (MITRE T1110):
-///   ≥ 5 LoginFailure events from the **same host** within 60 seconds.
-///
-/// Fires on each 5th failure (count % 5 == 0) to avoid flooding the detection
-/// channel with one detection per subsequent failure event.
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -37,9 +30,6 @@ impl Rule for BruteForceRule {
 
         let host = event.get_meta("host").unwrap_or("unknown");
 
-        // Point-in-time count: only events at or before this event's timestamp.
-        // Prevents false positives from dispatcher/engine race conditions when
-        // the correlator is already ahead of the rule engine.
         let failure_count = context.count_where_before(
             &EventType::LoginFailure,
             "host",
@@ -47,7 +37,7 @@ impl Rule for BruteForceRule {
             &event.timestamp,
         );
 
-        // Fire on threshold boundary to avoid duplicate detections.
+        // Fire at threshold boundaries to suppress repeated alerts.
         if failure_count < THRESHOLD || failure_count % THRESHOLD != 0 {
             return Ok(None);
         }
@@ -65,17 +55,13 @@ impl Rule for BruteForceRule {
             Severity::High.weight(),
             self.tags().iter().map(|s| s.to_string()).collect(),
             vec![
-                format!(
-                    "{failure_count} failed login attempts against host '{host}' from {src_ip}"
-                ),
+                format!("{failure_count} failed login attempts against host '{host}' from {src_ip}"),
             ],
         );
 
         Ok(Some(detection))
     }
 }
-
-// ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -96,8 +82,7 @@ mod tests {
         let events: Vec<Event> = (0..5).map(|_| login_failure("SRV01")).collect();
         let trigger = events.last().unwrap().clone();
         let ctx     = RuleContext::new(events.clone(), 60);
-
-        let result = rule.evaluate(&trigger, &ctx).await.unwrap();
+        let result  = rule.evaluate(&trigger, &ctx).await.unwrap();
         assert!(result.is_some(), "should fire at exactly 5 failures");
     }
 
@@ -107,20 +92,17 @@ mod tests {
         let events: Vec<Event> = (0..4).map(|_| login_failure("SRV01")).collect();
         let trigger = events.last().unwrap().clone();
         let ctx     = RuleContext::new(events.clone(), 60);
-
-        let result = rule.evaluate(&trigger, &ctx).await.unwrap();
+        let result  = rule.evaluate(&trigger, &ctx).await.unwrap();
         assert!(result.is_none(), "should not fire with < 5 failures");
     }
 
     #[tokio::test]
     async fn different_host_no_fire() {
-        let rule = BruteForceRule;
-        // 5 failures for SRV01, trigger from SRV02 → different host.
+        let rule    = BruteForceRule;
         let events: Vec<Event> = (0..5).map(|_| login_failure("SRV01")).collect();
         let trigger = login_failure("SRV02");
-        let ctx = RuleContext::new(events, 60);
-
-        let result = rule.evaluate(&trigger, &ctx).await.unwrap();
+        let ctx     = RuleContext::new(events, 60);
+        let result  = rule.evaluate(&trigger, &ctx).await.unwrap();
         assert!(result.is_none());
     }
 }

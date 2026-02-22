@@ -1,10 +1,3 @@
-/// Rule: Registry Persistence
-///
-/// Pattern (MITRE T1547.001):
-///   A RegistryModification event targeting well-known Windows persistence
-///   key paths (Run, RunOnce, Winlogon, Services, Shell Folders).
-///
-/// Optionally correlated with a preceding ProcessCreation in the same window.
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -14,7 +7,6 @@ use crate::domain::{
     rule::{Rule, RuleContext},
 };
 
-/// Registry paths (lowercased) commonly abused for persistence.
 static PERSISTENCE_KEYS: &[&str] = &[
     r"software\microsoft\windows\currentversion\run",
     r"software\microsoft\windows\currentversion\runonce",
@@ -49,9 +41,8 @@ impl Rule for RegistryPersistenceRule {
             .unwrap_or("")
             .to_lowercase();
 
-        // Check whether the key matches any known persistence path.
         let matched = PERSISTENCE_KEYS.iter().find(|&&pat| reg_key.contains(pat));
-        let Some(_matched_pat) = matched else { return Ok(None) };
+        let Some(_) = matched else { return Ok(None) };
 
         let host  = event.get_meta("host").unwrap_or("unknown");
         let user  = event.get_meta("user").unwrap_or("unknown");
@@ -60,7 +51,6 @@ impl Rule for RegistryPersistenceRule {
             .or_else(|| event.get_meta("value"))
             .unwrap_or("unknown");
 
-        // Elevate confidence when a process was recently created on the same host.
         let correlated_process =
             context.has_event_type_before(&EventType::ProcessCreation, &event.timestamp);
 

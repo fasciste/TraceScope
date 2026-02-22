@@ -1,11 +1,3 @@
-/// Rule: Credential Dumping
-///
-/// Pattern (MITRE T1003):
-///   A ProcessCreation event whose command line contains a known
-///   credential-dumping tool name or LSASS-targeting pattern.
-///
-///   Covered indicators: Mimikatz, ProcDump targeting LSASS, comsvcs.dll
-///   MiniDump, WCE, gsecdump, fgdump, pwdump, and generic `hashdump`.
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -56,7 +48,7 @@ impl Rule for CredentialDumpingRule {
             .to_lowercase();
 
         let matched_indicator = INDICATORS.iter().find(|&&ind| cmd.contains(ind));
-        let Some(&indicator) = matched_indicator else { return Ok(None) };
+        let Some(&indicator)  = matched_indicator else { return Ok(None) };
 
         let host = event.get_meta("host").unwrap_or("unknown");
         let user = event.get_meta("user").unwrap_or("unknown");

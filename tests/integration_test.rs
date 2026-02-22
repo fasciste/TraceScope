@@ -44,29 +44,33 @@ fn login_failure(host: &str) -> serde_json::Value {
 
 fn base_config(json_paths: Vec<std::path::PathBuf>) -> RunConfig {
     RunConfig {
-        evtx_paths:    vec![],
-        pcap_paths:    vec![],
-        syslog_paths:  vec![],
+        evtx_paths:     vec![],
+        pcap_paths:     vec![],
+        syslog_paths:   vec![],
         json_paths,
-        sigma_paths:   vec![],
-        output_format: OutputFormat::Json,
-        window_secs:   120,
-        metrics_port:  None,
-        web_port:      3000,
+        sigma_paths:    vec![],
+        output_format:  OutputFormat::Json,
+        window_secs:    120,
+        metrics_port:   None,
+        web_port:       3000,
+        filter_hosts:   vec![],
+        disabled_rules: vec![],
     }
+}
+
+async fn write_jsonl(path: &std::path::Path, events: &[serde_json::Value]) {
+    let content = events.iter()
+        .map(|ev| serde_json::to_string(ev).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n") + "\n";
+    tokio::fs::write(path, content).await.unwrap();
 }
 
 #[tokio::test]
 async fn pipeline_detects_powershell_lateral() {
     let dir  = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("events.json");
-
-    let mut content = String::new();
-    for ev in &[ps_creation(), network_conn(), service_install()] {
-        content.push_str(&serde_json::to_string(ev).unwrap());
-        content.push('\n');
-    }
-    tokio::fs::write(&path, &content).await.unwrap();
+    write_jsonl(&path, &[ps_creation(), network_conn(), service_install()]).await;
 
     let report = run(base_config(vec![path])).await.unwrap();
 
@@ -77,17 +81,93 @@ async fn pipeline_detects_powershell_lateral() {
     assert_eq!(report.summary.total, report.detections.len());
 }
 
+// Regression test: rule must fire even when the network event comes AFTER service install.
+#[tokio::test]
+async fn pipeline_detects_lateral_out_of_order() {
+    let dir  = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("oot.json");
+    // Deliberately: ps_creation → service_install → network_conn (network AFTER service)
+    write_jsonl(&path, &[
+        ps_creation(),
+        service_install(),
+        network_conn(),
+    ]).await;
+
+    let report = run(base_config(vec![path])).await.unwrap();
+
+    assert!(
+        report.detections.iter().any(|d| d.rule_id == "PS-LATERAL-001"),
+        "PS-LATERAL-001 should fire regardless of event ordering within the window"
+    );
+}
+
+// Nested metadata: cmd inside a sub-object should still work via alias/flattening.
+#[tokio::test]
+async fn pipeline_detects_lateral_nested_metadata() {
+    let dir  = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("nested.json");
+    // cmd is inside a nested "metadata" object, not at the top level.
+    write_jsonl(&path, &[
+        serde_json::json!({
+            "event_type": "process_creation",
+            "host":       "WORKSTATION01",
+            "metadata":   { "cmd": "powershell.exe -EncodedCommand AGUAbQBz", "pid": 4521 }
+        }),
+        network_conn(),
+        service_install(),
+    ]).await;
+
+    let report = run(base_config(vec![path])).await.unwrap();
+
+    assert!(
+        report.detections.iter().any(|d| d.rule_id == "PS-LATERAL-001"),
+        "PS-LATERAL-001 should fire when cmd is nested inside a metadata sub-object"
+    );
+}
+
+// --filter-host: events for the wrong host must be silently dropped.
+#[tokio::test]
+async fn filter_host_drops_non_matching_events() {
+    let dir  = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("mixed.json");
+    // 5 login failures for OTHERHOST, all should be dropped by the filter.
+    let mut events = vec![];
+    for _ in 0..5 { events.push(login_failure("OTHERHOST")); }
+    write_jsonl(&path, &events).await;
+
+    let config = RunConfig {
+        filter_hosts:   vec!["WORKSTATION01".into()],
+        ..base_config(vec![path])
+    };
+    let report = run(config).await.unwrap();
+    assert_eq!(report.events_processed, 0, "all events should be filtered out");
+    assert!(report.detections.is_empty());
+}
+
+// --disable-rule: disabled rules must not fire.
+#[tokio::test]
+async fn disable_rule_suppresses_detection() {
+    let dir  = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("events.json");
+    write_jsonl(&path, &[ps_creation(), network_conn(), service_install()]).await;
+
+    let config = RunConfig {
+        disabled_rules: vec!["PS-LATERAL-001".into()],
+        ..base_config(vec![path])
+    };
+    let report = run(config).await.unwrap();
+    assert!(
+        !report.detections.iter().any(|d| d.rule_id == "PS-LATERAL-001"),
+        "PS-LATERAL-001 should not fire when disabled"
+    );
+}
+
 #[tokio::test]
 async fn pipeline_detects_brute_force() {
     let dir  = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("bruteforce.json");
-
-    let mut content = String::new();
-    for _ in 0..5 {
-        content.push_str(&serde_json::to_string(&login_failure("SERVER02")).unwrap());
-        content.push('\n');
-    }
-    tokio::fs::write(&path, &content).await.unwrap();
+    let events: Vec<_> = (0..5).map(|_| login_failure("SERVER02")).collect();
+    write_jsonl(&path, &events).await;
 
     let report = run(base_config(vec![path])).await.unwrap();
 
@@ -119,17 +199,9 @@ async fn empty_file_no_detections() {
 async fn combined_score_reaches_likely_compromise() {
     let dir  = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("combined.json");
-
-    let mut content = String::new();
-    for ev in &[ps_creation(), network_conn(), service_install()] {
-        content.push_str(&serde_json::to_string(ev).unwrap());
-        content.push('\n');
-    }
-    for _ in 0..5 {
-        content.push_str(&serde_json::to_string(&login_failure("SRV02")).unwrap());
-        content.push('\n');
-    }
-    tokio::fs::write(&path, &content).await.unwrap();
+    let mut events = vec![ps_creation(), network_conn(), service_install()];
+    for _ in 0..5 { events.push(login_failure("SRV02")); }
+    write_jsonl(&path, &events).await;
 
     let report = run(base_config(vec![path])).await.unwrap();
     assert!(
@@ -145,20 +217,11 @@ async fn multi_file_ingestion() {
     let dir = tempfile::TempDir::new().unwrap();
 
     let path1 = dir.path().join("ps.json");
-    let mut c1 = String::new();
-    for ev in &[ps_creation(), network_conn(), service_install()] {
-        c1.push_str(&serde_json::to_string(ev).unwrap());
-        c1.push('\n');
-    }
-    tokio::fs::write(&path1, &c1).await.unwrap();
+    write_jsonl(&path1, &[ps_creation(), network_conn(), service_install()]).await;
 
     let path2 = dir.path().join("brute.json");
-    let mut c2 = String::new();
-    for _ in 0..5 {
-        c2.push_str(&serde_json::to_string(&login_failure("DC01")).unwrap());
-        c2.push('\n');
-    }
-    tokio::fs::write(&path2, &c2).await.unwrap();
+    let events: Vec<_> = (0..5).map(|_| login_failure("DC01")).collect();
+    write_jsonl(&path2, &events).await;
 
     let report = run(base_config(vec![path1, path2])).await.unwrap();
 

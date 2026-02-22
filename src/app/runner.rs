@@ -22,15 +22,17 @@ pub enum OutputFormat { Cli, Json, Web }
 
 #[derive(Debug)]
 pub struct RunConfig {
-    pub evtx_paths:    Vec<PathBuf>,
-    pub pcap_paths:    Vec<PathBuf>,
-    pub syslog_paths:  Vec<PathBuf>,
-    pub json_paths:    Vec<PathBuf>,
-    pub sigma_paths:   Vec<PathBuf>,
-    pub output_format: OutputFormat,
-    pub window_secs:   i64,
-    pub metrics_port:  Option<u16>,
-    pub web_port:      u16,
+    pub evtx_paths:     Vec<PathBuf>,
+    pub pcap_paths:     Vec<PathBuf>,
+    pub syslog_paths:   Vec<PathBuf>,
+    pub json_paths:     Vec<PathBuf>,
+    pub sigma_paths:    Vec<PathBuf>,
+    pub output_format:  OutputFormat,
+    pub window_secs:    i64,
+    pub metrics_port:   Option<u16>,
+    pub web_port:       u16,
+    pub filter_hosts:   Vec<String>,
+    pub disabled_rules: Vec<String>,
 }
 
 pub async fn run(config: RunConfig) -> Result<ForensicReport> {
@@ -69,9 +71,10 @@ pub async fn run(config: RunConfig) -> Result<ForensicReport> {
     }
     drop(raw_tx);
 
-    let ctr_clone = Arc::clone(&events_ctr);
-    let norm_task = tokio::spawn(async move {
-        Normalizer::new().run(raw_rx, norm_tx, ctr_clone).await;
+    let normalizer = Normalizer::new().with_filter_hosts(config.filter_hosts.clone());
+    let ctr_clone  = Arc::clone(&events_ctr);
+    let norm_task  = tokio::spawn(async move {
+        normalizer.run(raw_rx, norm_tx, ctr_clone).await;
     });
 
     let bc_tx_disp = bc_tx.clone();
@@ -93,9 +96,13 @@ pub async fn run(config: RunConfig) -> Result<ForensicReport> {
             Err(e) => warn!(path = %path.display(), error = %e, "Failed to load Sigma rule"),
         }
     }
+    if !config.disabled_rules.is_empty() {
+        rules.retain(|r| !config.disabled_rules.iter().any(|id| id == r.id()));
+        info!(disabled = config.disabled_rules.join(", "), "Rules disabled");
+    }
 
-    let corr_eng   = Arc::clone(&correlator);
-    let det_tx_eng = det_tx.clone();
+    let corr_eng    = Arc::clone(&correlator);
+    let det_tx_eng  = det_tx.clone();
     let engine_task = tokio::spawn(async move {
         RuleEngine::new(rules, corr_eng, event_rx, det_tx_eng).run().await;
     });

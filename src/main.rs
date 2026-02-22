@@ -42,6 +42,14 @@ enum Commands {
         #[arg(long, value_name = "FILE", num_args = 1)]
         sigma: Vec<PathBuf>,
 
+        /// Only process events from this host (repeatable, case-insensitive)
+        #[arg(long, value_name = "HOST", num_args = 1)]
+        filter_host: Vec<String>,
+
+        /// Disable a built-in rule by ID (repeatable, e.g. PS-LATERAL-001)
+        #[arg(long, value_name = "RULE_ID", num_args = 1)]
+        disable_rule: Vec<String>,
+
         /// Output format: cli (default) | json | web
         #[arg(long, default_value = "cli", value_name = "FORMAT")]
         output: String,
@@ -75,7 +83,9 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Ingest {
-            evtx, pcap, syslog, json, sigma, output, window, metrics_port, web_port,
+            evtx, pcap, syslog, json, sigma,
+            filter_host, disable_rule,
+            output, window, metrics_port, web_port,
         } => {
             let fmt = match output.as_str() {
                 "json" => OutputFormat::Json,
@@ -84,15 +94,17 @@ async fn main() -> Result<()> {
             };
 
             let config = RunConfig {
-                evtx_paths:    evtx,
-                pcap_paths:    pcap,
-                syslog_paths:  syslog,
-                json_paths:    json,
-                sigma_paths:   sigma,
-                output_format: fmt.clone(),
-                window_secs:   window as i64,
+                evtx_paths:     evtx,
+                pcap_paths:     pcap,
+                syslog_paths:   syslog,
+                json_paths:     json,
+                sigma_paths:    sigma,
+                output_format:  fmt.clone(),
+                window_secs:    window as i64,
                 metrics_port,
                 web_port,
+                filter_hosts:   filter_host,
+                disabled_rules: disable_rule,
             };
 
             let report = run(config).await?;

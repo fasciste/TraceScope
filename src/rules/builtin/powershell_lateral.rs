@@ -1,13 +1,3 @@
-/// Rule: PowerShell Lateral Movement
-///
-/// Pattern (MITRE T1059.001 + T1543.003):
-///   ServiceInstallation  ← trigger
-///   + ProcessCreation with "powershell" in cmd  (within window)
-///   + NetworkConnection                         (within window)
-///
-/// Why trigger on ServiceInstallation?  The service creation is usually the
-/// *last* step; by that time the PowerShell spawn and network connection are
-/// already in the correlator window.
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -32,29 +22,23 @@ impl Rule for PowerShellLateralRule {
     }
 
     async fn evaluate(&self, event: &Event, context: &RuleContext) -> Result<Option<Detection>> {
-        // Only trigger when we see a service installation.
         if event.event_type != EventType::ServiceInstallation {
             return Ok(None);
         }
 
-        // Point-in-time lookup: only consider events that happened before
-        // this service installation (guards against dispatcher race-ahead).
-        let trigger_ts = &event.timestamp;
-
+        // Look for any PowerShell process and network connection anywhere in
+        // the correlation window — event order doesn't matter for forensic replay.
         let ps_event = context.recent_events.iter().find(|e| {
-            e.event_type == EventType::ProcessCreation
-                && &e.timestamp <= trigger_ts
-                && e.get_meta("cmd")
-                    .map(|c| c.to_lowercase().contains("powershell"))
-                    .unwrap_or(false)
+            e.event_type == EventType::ProcessCreation && {
+                let c = e.get_meta("cmd").unwrap_or("").to_lowercase();
+                c.contains("powershell") || c.contains("pwsh")
+            }
         });
 
         let Some(ps) = ps_event else { return Ok(None) };
 
-        let net_event = context
-            .recent_events
-            .iter()
-            .find(|e| e.event_type == EventType::NetworkConnection && &e.timestamp <= trigger_ts);
+        let net_event = context.recent_events.iter()
+            .find(|e| e.event_type == EventType::NetworkConnection);
 
         let Some(net) = net_event else { return Ok(None) };
 

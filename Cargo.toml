@@ -14,18 +14,16 @@ name = "tracescope"
 path = "src/lib.rs"
 
 [dependencies]
-tokio       = { version = "1",   features = ["full"] }
-tokio-util  = { version = "0.7", features = ["codec", "io"] }
-bytes       = "1"
+tokio = { version = "1", features = ["full"] }
 
-serde       = { version = "1", features = ["derive", "rc"] }
-serde_json  = "1"
-serde_yaml  = "0.9"
+serde      = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+serde_yaml = "0.9"
 
-chrono      = { version = "0.4", features = ["serde"] }
-uuid        = { version = "1",   features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid   = { version = "1",   features = ["v4", "serde"] }
 
-clap        = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
 
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
@@ -33,18 +31,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 async-trait = "0.1"
 thiserror   = "1"
 anyhow      = "1"
-dashmap     = "5"
 
 # Native EVTX parsing — pure Rust, no C dependency
-evtx        = { version = "0.8", default-features = false }
+evtx = { version = "0.8", default-features = false }
 
 # Native PCAP file reading — pure Rust, libpcap not required for offline analysis
-pcap-file   = "2"
-etherparse  = "0.15"
+pcap-file  = "2"
+etherparse = "0.15"
 
 # Web dashboard
-axum        = { version = "0.7", features = ["json"] }
-tower-http  = { version = "0.5", features = ["cors"] }
+axum       = { version = "0.7", features = ["json"] }
+tower-http = { version = "0.5", features = ["cors"] }
 
 # Prometheus metrics
 metrics                     = "0.23"
@@ -55,9 +52,7 @@ pcap = { version = "2", optional = true }
 
 [features]
 default      = []
-plugins      = []
 live-capture = ["dep:pcap"]
-full         = ["plugins", "live-capture"]
 
 [dev-dependencies]
 tokio-test  = "0.4"

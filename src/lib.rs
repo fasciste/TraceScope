@@ -6,5 +6,4 @@ pub mod ingestion;
 pub mod metrics;
 pub mod output;
 pub mod pipeline;
-pub mod plugins;
 pub mod rules;
