@@ -1,6 +1,6 @@
 # TraceScope
 
-[![CI](https://github.com/fasciste/TraceScope/actions/workflows/ci.yml/badge.svg)](https://github.com/fasciste/TraceScope/actions/workflows/ci.yml)
+[![CI](https://github.com/kyvran/TraceScope/actions/workflows/ci.yml/badge.svg)](https://github.com/kyvran/TraceScope/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -67,7 +67,7 @@ All channels are **bounded** (backpressure). Shutdown is **cascade-automatic**: 
 ## Installation
 
 ```bash
-git clone https://github.com/fasciste/TraceScope.git
+git clone https://github.com/kyvran/TraceScope.git
 cd TraceScope
 cargo build --release
 # binary: ./target/release/tracescope
